@@ -73,15 +73,15 @@ def predict_image(image_path):
         predicted_class = CLASSES[pred.item()]
     return predicted_class
 
-# === Example usage ===
+# # === Example usage ===
 def predict_from_folder(folder_path):
     for file in os.listdir(folder_path):
-        if file.lower().endswith((".jpg", ".png", ".jpeg")):
+        if file.endswith((".jpg", ".png", ".jpeg")):
             img_path = os.path.join(folder_path, file)
             result = predict_image(img_path)
             print(f"{file:30s} → {result}")
 
 if __name__ == "__main__":
     # change this to your test folder
-    IMG_DIR = "BRAIN_TUMOR/Testing/no_tumor"
+    IMG_DIR = "Training/no_tumor"
     predict_from_folder(IMG_DIR)
