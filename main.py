@@ -60,9 +60,6 @@ test_loader = DataLoader(
     pin_memory=PIN_MEMORY,
 )
 
-# images, labels = next(iter(train_loader))
-# print("Batch shape:", images.shape)   # [B, 1, 224, 224]
-# print("Labels shape:", labels.shape)
 
 class BrainTumorCNN(nn.Module):
     def __init__(self, num_classes = 4):
@@ -104,20 +101,17 @@ class BrainTumorCNN(nn.Module):
         x = self.classifier(x)
         return x
 
-# ==== Initialize model, loss, optimizer ====
+# Making the model
 num_classes = len(train_dataset.classes)
 model = BrainTumorCNN(num_classes=num_classes).to(device)
 
-# CrossEntropyLoss handles multi-class classification
+# Defining the loss function
 criterion = nn.CrossEntropyLoss()
 
-# Adam optimizer is a good default
+# Adaptive Gradient Decsent 
 optimizer = optim.Adam(model.parameters(), lr=3e-4, weight_decay=1e-4)
-
-# Optional: learning rate scheduler
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
-# ==== Training parameters ====
 EPOCHS = 20  # start small to test
 
 def train_one_epoch(model, dataloader, optimizer, criterion):
@@ -185,7 +179,7 @@ for epoch in range(EPOCHS):
     if val_acc > best_val_acc:
         best_val_acc = val_acc
         torch.save(model.state_dict(), "best_brain_tumor_model.pth")
-        print("✅ Saved new best model")
+        print("Saved new best model")
 
 print("\nTraining complete. Best validation accuracy:", best_val_acc)
 
