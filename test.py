@@ -66,11 +66,11 @@ transform = transforms.Compose([
 
 def predict_image(image_path):
     image = Image.open(image_path).convert("RGB")
-    tensor = transform(image).unsqueeze(0).to(DEVICE)  # [1, 1, 224, 224]
+    tensor = transform(image).unsqueeze(0).to(DEVICE)  # type: ignore
     with torch.no_grad():
         output = model(tensor)
         _, pred = torch.max(output, 1)
-        predicted_class = CLASSES[pred.item()]
+        predicted_class = CLASSES[pred.item()] # type: ignore
     return predicted_class
 
 # # === Example usage ===
