@@ -15,7 +15,7 @@ TRAIN_DIR = os.path.join(DATA_DIR, "Training")
 TEST_DIR = os.path.join(DATA_DIR, "Testing")
 
 BATCH_SIZE = 32
-NUM_WORKERS = 0 
+NUM_WORKERS = 0
 PIN_MEMORY = False
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -60,9 +60,9 @@ test_loader = DataLoader(
     pin_memory=PIN_MEMORY,
 )
 
-images, labels = next(iter(train_loader))
-print("Batch shape:", images.shape)   # [B, 1, 224, 224]
-print("Labels shape:", labels.shape)
+# images, labels = next(iter(train_loader))
+# print("Batch shape:", images.shape)   # [B, 1, 224, 224]
+# print("Labels shape:", labels.shape)
 
 class BrainTumorCNN(nn.Module):
     def __init__(self, num_classes = 4):
@@ -90,12 +90,12 @@ class BrainTumorCNN(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(256 * 6 * 6, 4096),
+            nn.Linear(256 * 6 * 6, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
+            nn.Linear(512, 512),
             nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes)
+            nn.Linear(512, num_classes)
         )
 
     def forward(self, x):
@@ -112,13 +112,13 @@ model = BrainTumorCNN(num_classes=num_classes).to(device)
 criterion = nn.CrossEntropyLoss()
 
 # Adam optimizer is a good default
-optimizer = optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
+optimizer = optim.Adam(model.parameters(), lr=3e-4, weight_decay=1e-4)
 
 # Optional: learning rate scheduler
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
 # ==== Training parameters ====
-EPOCHS = 10  # start small to test
+EPOCHS = 20  # start small to test
 
 def train_one_epoch(model, dataloader, optimizer, criterion):
     model.train()

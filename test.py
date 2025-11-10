@@ -30,12 +30,12 @@ class BrainTumorCNN(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(256 * 6 * 6, 4096),
+            nn.Linear(256 * 6 * 6, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
+            nn.Linear(512, 512),
             nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes)
+            nn.Linear(512, num_classes)
         )
 
     def forward(self, x):
@@ -83,5 +83,5 @@ def predict_from_folder(folder_path):
 
 if __name__ == "__main__":
     # change this to your test folder
-    IMG_DIR = "Training/no_tumor"
+    IMG_DIR = "Testing/no_tumor"
     predict_from_folder(IMG_DIR)
