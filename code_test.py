@@ -15,7 +15,9 @@ import numpy as np
 
 # %%
 
-batch_size = 32
+BATCH_SIZE = 32
+NUM_WORKERS = 0
+PIN_MEMORY = False
 
 train_path = os.path.join(".","Training")
 test_path  = os.path.join(".","Testing")
@@ -43,4 +45,65 @@ test_transforms = transforms.Compose ([
 train_dataset = datasets.ImageFolder(root=train_path , transform=train_transforms)
 test_dataset  = datasets.ImageFolder(root=test_path, transform=test_transforms)
 
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=NUM_WORKERS,
+    pin_memory=PIN_MEMORY,
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=NUM_WORKERS,
+    pin_memory=PIN_MEMORY,
+)
+
 # %%
+# img, label = train_dataset[0]
+# img = (img * 0.5 + 0.5)*255
+# img = img.squeeze()
+# npimg = img.numpy().astype(np.uint8)
+# cv2.imshow("picture",npimg)
+# key = cv2.waitKey(0)
+# if key & 0xFF == ord('q'):
+#     cv2.destroyAllWindows()
+
+# %% Class
+
+class CNN_Network(nn.Module):
+    
+    def __init__(self, num_classes = 4):
+        super().__init__()
+
+        self.features = nn.Sequential(
+        nn.Conv2d(1, 64, kernel_size=11, stride=4, padding=2),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=3, stride=2),
+
+        nn.Conv2d(64, 192, kernel_size=5, padding=2),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=3, stride=2),  
+
+        nn.Conv2d(192, 384, kernel_size=3, padding=1),
+        nn.ReLU(inplace=True),
+
+        nn.Conv2d(384, 256, kernel_size=3, padding=1),
+        nn.ReLU(inplace=True),
+
+        nn.Conv2d(256, 256, kernel_size=3, padding=1),
+        nn.ReLU(inplace=True),
+        nn.MaxPool2d(kernel_size=3, stride=2),            
+        )
+    
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.classifier = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x
