@@ -113,3 +113,10 @@ class CNN_Class(nn.Module):
         x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
+    
+number_of_classes = len(train_dataset.classes)
+model = CNN_Class (num_of_classes=number_of_classes).to(device)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr = 1e-4, weight_decay=1e-4)
+
