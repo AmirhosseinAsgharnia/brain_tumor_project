@@ -75,23 +75,46 @@ class CNN_Class(nn.Module):
         super().__init__()
 
         self.feature = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(3, 3, kernel_size=3, stride=2, padding=1, groups=3, bias=False),
+            nn.BatchNorm2d(3),
+            nn.Conv2d(3, 32, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
 
-            nn.Conv2d(64, 192, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),  
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            nn.Conv2d(192, 384, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32, bias=False),
+            nn.BatchNorm2d(32),
+            nn.Conv2d(32, 32, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
 
-            nn.Conv2d(384, 192, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32, bias=False),
+            nn.BatchNorm2d(32),
+            nn.Conv2d(32, 64, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
 
-            nn.Conv2d(192, 32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1, groups=64, bias=False),
+            nn.BatchNorm2d(64),
+            nn.Conv2d(64, 128, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1, groups=128, bias=False),
+            nn.BatchNorm2d(128),
+            nn.Conv2d(128, 256, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1, groups=256, bias=False),
+            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 512, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, groups=512, bias=False),
+            nn.BatchNorm2d(512),
+            nn.Conv2d(512, 1024, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(1024),
             nn.ReLU(inplace=True),
         )
 
