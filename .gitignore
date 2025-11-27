@@ -1,5 +1,6 @@
 Testing/
 Training/
+Bayesian_tests/
 __pycache__/
 best_brain_tumor_model.pth
 
