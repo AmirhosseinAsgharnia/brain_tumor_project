@@ -7,7 +7,8 @@ import torch.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from torchvision import datasets, transforms
-
+import pyro
+from pyro.nn import PyroModule, PyroSample 
 #%% Hyper parameters setting
 
 BATCH_SIZE = 32
@@ -70,64 +71,78 @@ test_loader = DataLoader(
 
 #%% NN Class
 
-class CNN_Class(nn.Module):
+class CNN_Class(PyroModule):
     def __init__(self, num_of_classes = 4):
         super().__init__()
 
-        self.feature = nn.Sequential(
-            nn.Conv2d(3, 3, kernel_size=3, stride=2, padding=1, groups=3 ),
-            nn.Conv2d(3, 32, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_11 = PyroModule[nn.Conv2d](1, 1, kernel_size=3, stride=2, padding=1, groups=1 ) #type: ignore
+        self.conv_12 = PyroModule[nn.Conv2d](1, 32, kernel_size=3, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32 ),
-            nn.Conv2d(32, 32, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_21 = PyroModule[nn.Conv2d](32, 32, kernel_size=3, stride=1, padding=1, groups=32 ) #type: ignore
+        self.conv_22 = PyroModule[nn.Conv2d](32, 32, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32 ),
-            nn.Conv2d(32, 64, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_31 = PyroModule[nn.Conv2d](32, 32, kernel_size=3, stride=1, padding=1, groups=32 ) #type: ignore
+        self.conv_32 = PyroModule[nn.Conv2d](32, 64, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
+ 
+        self.conv_41 = PyroModule[nn.Conv2d](64, 64, kernel_size=3, stride=2, padding=1, groups=64 ) #type: ignore
+        self.conv_42 = PyroModule[nn.Conv2d](64, 128, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1, groups=64 ),
-            nn.Conv2d(64, 128, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_51 = PyroModule[nn.Conv2d](128, 128, kernel_size=3, stride=2, padding=1, groups=128 ) #type: ignore
+        self.conv_52 = PyroModule[nn.Conv2d](128, 256, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1, groups=128 ),
-            nn.Conv2d(128, 256, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_61 = PyroModule[nn.Conv2d](256, 256, kernel_size=3, stride=2, padding=1, groups=256 ) #type: ignore
+        self.conv_62 = PyroModule[nn.Conv2d](256, 512, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1, groups=256 ),
-            nn.Conv2d(256, 512, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
+        self.conv_71 = PyroModule[nn.Conv2d](512, 512, kernel_size=3, stride=2, padding=1, groups=512 ) #type: ignore
+        self.conv_72 = PyroModule[nn.Conv2d](512, 1024, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
-            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1, groups=512 ),
-            nn.Conv2d(512, 1024, kernel_size=1, stride=1, padding=0 ),
-            nn.ReLU(inplace=True),
-        )
+        self.avepooling = nn.AdaptiveAvgPool2d((7, 7))
 
-        self.avepooling = nn.AdaptiveAvgPool2d((7,7))
+        self.FC_1 = PyroModule[nn.Linear](7 * 7 * 1024 , 1024) #type: ignore
+        self.FC_2 = PyroModule[nn.Linear](1024 , 512) #type: ignore
+        self.FC_3 = PyroModule[nn.Linear](512 , num_of_classes) #type: ignore
 
-        self.classifier = nn.Sequential(
-            nn.Linear(7 * 7 * 1024 , 1024),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(1024, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(512, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(256, num_of_classes),
-        )
     def forward(self, x):
-        x = self.feature(x)
+
+        x = self.conv_11(x)
+        x = self.conv_12(x)
+        x = torch.relu(x)
+
+        x = self.conv_21(x)
+        x = self.conv_22(x)    # WARNING: should be padding=0 to match your original
+        x = torch.relu(x)
+
+        x = self.conv_31(x)
+        x = self.conv_32(x)    # WARNING: same padding issue
+        x = torch.relu(x)
+
+        x = self.conv_41(x)
+        x = self.conv_42(x)
+        x = torch.relu(x)
+
+        x = self.conv_51(x)
+        x = self.conv_52(x)
+        x = torch.relu(x)
+
+        x = self.conv_61(x)
+        x = self.conv_62(x)
+        x = torch.relu(x)
+
+        x = self.conv_71(x)
+        x = self.conv_72(x)
+        x = torch.relu(x)
+
         x = self.avepooling(x)
         x = torch.flatten(x, 1)
-        x = self.classifier(x)
+
+        x = self.FC_1(x)
+        x = torch.relu(x)
+
+        x = self.FC_2(x)
+        x = torch.relu(x)
+
+        x = self.FC_3(x)
+
         return x
-    
-number_of_classes = len(train_dataset.classes)
-model = CNN_Class (num_of_classes=number_of_classes).to(device)
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr = 1e-4, weight_decay=1e-4)
-
+model = CNN_Class(num_of_classes=4)
