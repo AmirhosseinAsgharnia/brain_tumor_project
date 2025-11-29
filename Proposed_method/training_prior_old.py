@@ -7,7 +7,7 @@ import torch.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from torchvision import datasets, transforms
-
+import tqdm
 #%% Hyper parameters setting
 
 BATCH_SIZE = 32
@@ -29,7 +29,6 @@ testing_path = "./original_dataset/Testing"
 #%% Transforms
 
 train_transform = transforms.Compose([
-    transforms.Grayscale(num_output_channels=1),
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.RandomRotation(10),
@@ -38,7 +37,6 @@ train_transform = transforms.Compose([
 ])
 
 test_transform = transforms.Compose([
-    transforms.Grayscale(num_output_channels=1),
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=0.5, std=0.5)
@@ -131,3 +129,71 @@ model = CNN_Class (num_of_classes=number_of_classes).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr = 1e-4, weight_decay=1e-4)
 
+EPOCHS = 20
+
+def train_one_epoch(model, dataloader, criterion, optimizer):
+    
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    for images, labels in tqdm(dataloader, desc="Training", leave=False):
+        images, labels = images.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * images.size(0)
+
+        _, preds = torch.max(outputs, 1)
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+
+    epoch_loss = running_loss / total
+    epoch_acc = correct / total
+    return epoch_loss, epoch_acc
+
+def validate_one_epoch(model, dataloader, criterion):
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for images, labels in tqdm(dataloader, desc="Validation", leave=False):
+            images, labels = images.to(device), labels.to(device)
+
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+            running_loss += loss.item() * images.size(0)
+            _, preds = torch.max(outputs, 1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+
+    epoch_loss = running_loss / total
+    epoch_acc = correct / total
+    return epoch_loss, epoch_acc
+
+best_val_acc = 0.0
+
+for epoch in range(EPOCHS):
+    print(f"\nEpoch {epoch+1}/{EPOCHS}")
+
+    train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion)
+    val_loss, val_acc = validate_one_epoch(model, test_loader, criterion)
+
+    print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
+    print(f"Val   Loss: {val_loss:.4f} | Val   Acc: {val_acc:.4f}")
+
+    # Save best model based on validation accuracy
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        torch.save(model.state_dict(), "best_brain_tumor_model.pth")
+        print("Saved new best model")
+
+print("\nTraining complete. Best validation accuracy:", best_val_acc)

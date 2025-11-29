@@ -9,6 +9,7 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import pyro
 from pyro.nn import PyroModule, PyroSample 
+import pyro.distributions as dist
 #%% Hyper parameters setting
 
 BATCH_SIZE = 32
@@ -78,6 +79,8 @@ class CNN_Class(PyroModule):
         self.conv_11 = PyroModule[nn.Conv2d](1, 1, kernel_size=3, stride=2, padding=1, groups=1 ) #type: ignore
         self.conv_12 = PyroModule[nn.Conv2d](1, 32, kernel_size=3, stride=1, padding=0, groups=1 ) #type: ignore
 
+        self.conv_11.weights =  PyroSample(dist.Normal(0., prior_scale).expand([hid_dim, in_dim]).to_event(2))
+
         self.conv_21 = PyroModule[nn.Conv2d](32, 32, kernel_size=3, stride=1, padding=1, groups=32 ) #type: ignore
         self.conv_22 = PyroModule[nn.Conv2d](32, 32, kernel_size=1, stride=1, padding=0, groups=1 ) #type: ignore
 
@@ -109,11 +112,11 @@ class CNN_Class(PyroModule):
         x = torch.relu(x)
 
         x = self.conv_21(x)
-        x = self.conv_22(x)    # WARNING: should be padding=0 to match your original
+        x = self.conv_22(x) 
         x = torch.relu(x)
 
         x = self.conv_31(x)
-        x = self.conv_32(x)    # WARNING: same padding issue
+        x = self.conv_32(x)
         x = torch.relu(x)
 
         x = self.conv_41(x)
