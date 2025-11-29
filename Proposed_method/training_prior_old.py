@@ -7,7 +7,7 @@ import torch.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from torchvision import datasets, transforms
-import tqdm
+from tqdm import tqdm
 #%% Hyper parameters setting
 
 BATCH_SIZE = 32
@@ -44,8 +44,8 @@ test_transform = transforms.Compose([
 
 #%% Data loader
 
-train_dataset = datasets.ImageFolder(training_path, transform=train_transform)
-test_dataset  = datasets.ImageFolder(testing_path, transform=test_transform)
+train_dataset = datasets.ImageFolder(root=training_path, transform=train_transform)
+test_dataset  = datasets.ImageFolder(root=testing_path, transform=test_transform)
 
 print("Classes:", train_dataset.classes)
 print("Class to index mapping:", train_dataset.class_to_idx)
