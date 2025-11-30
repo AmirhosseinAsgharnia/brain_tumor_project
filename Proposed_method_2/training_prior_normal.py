@@ -1,6 +1,6 @@
 #%% Import Libraries
 import os
-import numpy
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.functional as F
@@ -9,6 +9,19 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from tqdm import tqdm
 
+#%% Seed
+
+import random
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Optional: reproducible but slower
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 #%% Hyper parameters setting
 
@@ -27,8 +40,8 @@ dname   = os.path.dirname(abspath)
 os.chdir(dname)
 
 # training_path = "./training_phase_1"
-training_path = "./original_dataset/Training"
-testing_path = "./original_dataset/Testing"
+training_path = "./testing_data"
+testing_path = "./training_data"
 
 train_transform = transforms.Compose([
     transforms.Lambda(lambda img: img.convert("RGB")),
@@ -174,68 +187,49 @@ def validate_one_epoch(model, dataloader, criterion):
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
-best_val_acc = 0.0
-
-# from torch.utils.data import Subset
-
-
-# small_dataset = Subset(train_dataset, list(range(64)))
-# small_loader  = DataLoader(small_dataset, batch_size=32, shuffle=True)
-
-# for epoch in range(20):
-#     loss, acc = train_one_epoch(model, small_loader, optimizer, criterion)
-#     print(epoch, f"loss={loss:.4f}", f"acc={acc:.4f}")
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
-for epoch in range(EPOCHS):
-    print(f"\nEpoch {epoch+1}/{EPOCHS}")
-
-    train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion)
-    val_loss, val_acc = validate_one_epoch(model, test_loader, criterion)
-
-    print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
-    print(f"Val   Loss: {val_loss:.4f} | Val   Acc: {val_acc:.4f}")
+def log_write(msg, logfile="training_log.txt"):
+    with open(logfile, "a") as f:
+        f.write(msg + "\n")
 
 
-    # Save best model based on validation accuracy
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(), "best_brain_tumor_model.pth")
-        print("Saved new best model")
+logfile = "training_log.txt"
 
+for run in range(10):
 
+    seed = 1000 + run
+    set_seed(seed)
 
-    # model.eval()
-    # all_preds = []
-    # all_labels = []
+    # Header for this run
+    log_write(f"\n========== RUN {run} | SEED = {seed} ==========", logfile)
+    print(f"\n========== RUN {run} | SEED = {seed} ==========")
 
-    # with torch.no_grad():
-    #     for xb, yb in test_loader:
-    #         xb = xb.to(device)
-    #         yb = yb.to(device)
+    best_val_acc = 0.0
 
-    #         logits = model(xb)              # shape [B, num_classes]
-    #         preds  = torch.argmax(logits, dim=1)
+    # Reinitialize your model and optimizer each run!
+    model = CNN_Class().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    #         all_preds.append(preds.cpu())
-    #         all_labels.append(yb.cpu())
+    for epoch in range(EPOCHS):
 
-    # all_preds  = torch.cat(all_preds).numpy()
-    # all_labels = torch.cat(all_labels).numpy()
+        print(f"\nEpoch {epoch+1}/{EPOCHS}")
+        log_write(f"\nEpoch {epoch+1}/{EPOCHS}", logfile)
 
-    # acc     = accuracy_score(all_labels, all_preds)
-    # prec    = precision_score(all_labels, all_preds, average="macro")   # or "weighted"
-    # rec     = recall_score(all_labels, all_preds, average="macro")
-    # f1      = f1_score(all_labels, all_preds, average="macro")
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion)
+        val_loss, val_acc = validate_one_epoch(model, test_loader, criterion)
 
-    # print(f"Val Acc: {acc*100:.2f}%")
-    # print(f"Precision (macro): {prec:.2f}")
-    # print(f"Recall (macro):    {rec:.2f}")
-    # print(f"F1-score (macro):  {f1:.2f}")
+        msg = (f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
+               f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-    # print("\nPer-class report:")
-    # print(classification_report(all_labels, all_preds, digits=3))
+        print(msg)
+        log_write(msg, logfile)
 
-    # print("\nConfusion matrix:")
-    # print(confusion_matrix(all_labels, all_preds))
-    print("\nTraining complete. Best validation accuracy:", best_val_acc)
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), f"best_brain_tumor_model_{seed}.pth")
+            print("Saved new best model")
+            log_write("Saved new best model", logfile)
 
+    # End of run
+    print(f"Training complete. Best validation accuracy: {best_val_acc}")
+    log_write(f"Training complete. Best validation accuracy: {best_val_acc}", logfile)

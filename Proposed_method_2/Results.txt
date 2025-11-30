@@ -1,0 +1,179 @@
+Epoch 1/100
+Train Loss: 1.3598 | Train Acc: 0.2800
+Val   Loss: 1.3472 | Val   Acc: 0.2880
+Saved new best model
+
+Training complete. Best validation accuracy: 0.2879746835443038
+
+Epoch 2/100
+Train Loss: 1.3517 | Train Acc: 0.2839
+Val   Loss: 1.3479 | Val   Acc: 0.2880
+
+Training complete. Best validation accuracy: 0.2879746835443038
+
+Epoch 3/100
+Train Loss: 1.3526 | Train Acc: 0.2772
+Val   Loss: 1.3483 | Val   Acc: 0.2880
+
+Training complete. Best validation accuracy: 0.2879746835443038
+
+Epoch 4/100
+Train Loss: 1.3511 | Train Acc: 0.2756                                                                                                                                                                                        
+Val   Loss: 1.3470 | Val   Acc: 0.2880
+
+Training complete. Best validation accuracy: 0.2879746835443038
+
+Epoch 5/100
+Train Loss: 1.3507 | Train Acc: 0.2972                                                                                                                                                                                        
+Val   Loss: 1.3493 | Val   Acc: 0.2880
+
+Training complete. Best validation accuracy: 0.2879746835443038
+
+Epoch 6/100
+Train Loss: 1.3234 | Train Acc: 0.3168                                                                                                                                                                                        
+Val   Loss: 1.1510 | Val   Acc: 0.3924
+Saved new best model
+
+Training complete. Best validation accuracy: 0.3924050632911392
+
+Epoch 7/100
+Train Loss: 1.1218 | Train Acc: 0.4745                                                                                                                                                                                        
+Val   Loss: 0.9927 | Val   Acc: 0.5949
+Saved new best model
+
+Training complete. Best validation accuracy: 0.5949367088607594
+
+Epoch 8/100
+Train Loss: 0.9236 | Train Acc: 0.6135                                                                                                                                                                                        
+Val   Loss: 0.9534 | Val   Acc: 0.5791
+
+Training complete. Best validation accuracy: 0.5949367088607594
+
+Epoch 9/100
+Train Loss: 0.8321 | Train Acc: 0.6594                                                                                                                                                                                        
+Val   Loss: 0.7009 | Val   Acc: 0.6804
+Saved new best model
+
+Training complete. Best validation accuracy: 0.680379746835443
+
+Epoch 10/100
+Train Loss: 0.7398 | Train Acc: 0.6950                                                                                                                                                                                        
+Val   Loss: 0.6263 | Val   Acc: 0.7342
+Saved new best model
+
+Training complete. Best validation accuracy: 0.7341772151898734
+
+Epoch 11/100
+Train Loss: 0.6508 | Train Acc: 0.7381                                                                                                                                                                                        
+Val   Loss: 0.6456 | Val   Acc: 0.7152
+
+Training complete. Best validation accuracy: 0.7341772151898734
+
+Epoch 12/100
+Train Loss: 0.5685 | Train Acc: 0.7662                                                                                                                                                                                        
+Val   Loss: 0.5657 | Val   Acc: 0.7563
+Saved new best model
+
+Training complete. Best validation accuracy: 0.7563291139240507
+
+Epoch 13/100
+Train Loss: 0.4986 | Train Acc: 0.7897                                                                                                                                                                                        
+Val   Loss: 0.5750 | Val   Acc: 0.7342
+
+Training complete. Best validation accuracy: 0.7563291139240507
+
+Epoch 14/100
+Train Loss: 0.4163 | Train Acc: 0.8211                                                                                                                                                                                        
+Val   Loss: 0.4633 | Val   Acc: 0.7880
+Saved new best model
+
+Training complete. Best validation accuracy: 0.7879746835443038
+
+Epoch 15/100
+Train Loss: 0.3569 | Train Acc: 0.8571                                                                                                                                                                                        
+Val   Loss: 0.4065 | Val   Acc: 0.8228
+Saved new best model
+
+Training complete. Best validation accuracy: 0.8227848101265823
+
+Epoch 16/100
+Train Loss: 0.2868 | Train Acc: 0.8837                                                                                                                                                                                        
+Val   Loss: 0.4588 | Val   Acc: 0.8101
+
+Training complete. Best validation accuracy: 0.8227848101265823
+
+Epoch 17/100
+Train Loss: 0.2321 | Train Acc: 0.9154                                                                                                                                                                                        
+Val   Loss: 0.4412 | Val   Acc: 0.8323
+Saved new best model
+
+Training complete. Best validation accuracy: 0.8322784810126582
+
+Epoch 18/100
+Train Loss: 0.2267 | Train Acc: 0.9115                                                                                                                                                                                        
+Val   Loss: 0.3746 | Val   Acc: 0.8608
+Saved new best model
+
+Training complete. Best validation accuracy: 0.8607594936708861
+
+Epoch 19/100
+Train Loss: 0.1549 | Train Acc: 0.9401                                                                                                                                                                                        
+Val   Loss: 0.4627 | Val   Acc: 0.8291
+
+Training complete. Best validation accuracy: 0.8607594936708861
+
+Epoch 20/100
+Train Loss: 0.1431 | Train Acc: 0.9487                                                                                                                                                                                        
+Val   Loss: 0.3236 | Val   Acc: 0.8797
+Saved new best model
+
+Training complete. Best validation accuracy: 0.879746835443038
+
+Epoch 21/100
+Train Loss: 0.0774 | Train Acc: 0.9726                                                                                                                                                                                        
+Val   Loss: 0.3465 | Val   Acc: 0.8671
+
+Training complete. Best validation accuracy: 0.879746835443038
+
+Epoch 22/100
+Train Loss: 0.0430 | Train Acc: 0.9851                                                                                                                                                                                        
+Val   Loss: 0.5084 | Val   Acc: 0.8513
+
+Training complete. Best validation accuracy: 0.879746835443038
+
+Epoch 23/100
+Train Loss: 0.1084 | Train Acc: 0.9616                                                                                                                                                                                        
+Val   Loss: 0.4018 | Val   Acc: 0.8924
+Saved new best model
+
+Training complete. Best validation accuracy: 0.8924050632911392
+
+Epoch 24/100
+Train Loss: 0.0803 | Train Acc: 0.9695                                                                                                                                                                                        
+Val   Loss: 0.5232 | Val   Acc: 0.8449
+
+Training complete. Best validation accuracy: 0.8924050632911392
+
+Epoch 25/100
+Train Loss: 0.0436 | Train Acc: 0.9875                                                                                                                                                                                        
+Val   Loss: 0.4940 | Val   Acc: 0.8703
+
+Training complete. Best validation accuracy: 0.8924050632911392
+
+Epoch 26/100
+Train Loss: 0.0161 | Train Acc: 0.9949
+Val   Loss: 0.4850 | Val   Acc: 0.8766
+
+Training complete. Best validation accuracy: 0.8924050632911392
+
+Epoch 27/100
+Train Loss: 0.0305 | Train Acc: 0.9910
+Val   Loss: 0.4887 | Val   Acc: 0.8671
+
+Training complete. Best validation accuracy: 0.8924050632911392
+
+Epoch 28/100
+Train Loss: 0.0207 | Train Acc: 0.9933
+Val   Loss: 0.5936 | Val   Acc: 0.8671
+
+Training complete. Best validation accuracy: 0.8924050632911392
