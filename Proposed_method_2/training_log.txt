@@ -1,0 +1,99 @@
+
+========== RUN 0 | SEED = 1000 ==========
+
+Epoch 1/20
+Train Loss: 1.3569 | Train Acc: 0.2831 | Val Loss: 1.3505 | Val Acc: 0.2880
+Saved new best model
+
+Epoch 2/20
+Train Loss: 1.3552 | Train Acc: 0.2839 | Val Loss: 1.3513 | Val Acc: 0.2880
+
+Epoch 3/20
+Train Loss: 1.3517 | Train Acc: 0.2874 | Val Loss: 1.3509 | Val Acc: 0.2880
+
+Epoch 4/20
+Train Loss: 1.3316 | Train Acc: 0.2901 | Val Loss: 1.1840 | Val Acc: 0.3766
+Saved new best model
+
+Epoch 5/20
+Train Loss: 1.1848 | Train Acc: 0.4272 | Val Loss: 1.1044 | Val Acc: 0.5253
+Saved new best model
+
+Epoch 6/20
+Train Loss: 1.0451 | Train Acc: 0.5509 | Val Loss: 0.8347 | Val Acc: 0.6297
+Saved new best model
+
+Epoch 7/20
+Train Loss: 0.8886 | Train Acc: 0.6280 | Val Loss: 0.7487 | Val Acc: 0.7120
+Saved new best model
+
+Epoch 8/20
+Train Loss: 0.7932 | Train Acc: 0.6738 | Val Loss: 0.6617 | Val Acc: 0.7120
+
+Epoch 9/20
+Train Loss: 0.6984 | Train Acc: 0.7110 | Val Loss: 0.6387 | Val Acc: 0.7278
+Saved new best model
+
+Epoch 10/20
+Train Loss: 0.6306 | Train Acc: 0.7416 | Val Loss: 0.6492 | Val Acc: 0.7310
+Saved new best model
+
+Epoch 11/20
+Train Loss: 0.5714 | Train Acc: 0.7643 | Val Loss: 0.5060 | Val Acc: 0.7785
+Saved new best model
+
+Epoch 12/20
+Train Loss: 0.4902 | Train Acc: 0.7882 | Val Loss: 0.4754 | Val Acc: 0.7753
+
+Epoch 13/20
+Train Loss: 0.4407 | Train Acc: 0.8238 | Val Loss: 0.5424 | Val Acc: 0.7785
+
+Epoch 14/20
+Train Loss: 0.3424 | Train Acc: 0.8649 | Val Loss: 0.4923 | Val Acc: 0.8038
+Saved new best model
+
+Epoch 15/20
+Train Loss: 0.3163 | Train Acc: 0.8865 | Val Loss: 0.5475 | Val Acc: 0.7943
+
+Epoch 16/20
+Train Loss: 0.2282 | Train Acc: 0.9119 | Val Loss: 0.3898 | Val Acc: 0.8513
+Saved new best model
+
+Epoch 17/20
+Train Loss: 0.1560 | Train Acc: 0.9432 | Val Loss: 0.5208 | Val Acc: 0.8418
+
+Epoch 18/20
+Train Loss: 0.1329 | Train Acc: 0.9471 | Val Loss: 0.5950 | Val Acc: 0.8354
+
+Epoch 19/20
+Train Loss: 0.1036 | Train Acc: 0.9628 | Val Loss: 0.4445 | Val Acc: 0.8703
+Saved new best model
+
+Epoch 20/20
+Train Loss: 0.0695 | Train Acc: 0.9765 | Val Loss: 0.4412 | Val Acc: 0.8513
+Training complete. Best validation accuracy: 0.870253164556962
+
+========== RUN 1 | SEED = 1001 ==========
+
+Epoch 1/20
+Train Loss: 1.3571 | Train Acc: 0.2749 | Val Loss: 1.3500 | Val Acc: 0.2880
+Saved new best model
+
+Epoch 2/20
+Train Loss: 1.3524 | Train Acc: 0.3007 | Val Loss: 1.3496 | Val Acc: 0.2880
+
+Epoch 3/20
+Train Loss: 1.3510 | Train Acc: 0.2937 | Val Loss: 1.3486 | Val Acc: 0.2880
+
+Epoch 4/20
+Train Loss: 1.3526 | Train Acc: 0.2874 | Val Loss: 1.3480 | Val Acc: 0.2880
+
+Epoch 5/20
+Train Loss: 1.3409 | Train Acc: 0.2788 | Val Loss: 1.2774 | Val Acc: 0.3576
+Saved new best model
+
+Epoch 6/20
+Train Loss: 1.2104 | Train Acc: 0.4064 | Val Loss: 1.1366 | Val Acc: 0.4494
+Saved new best model
+
+Epoch 7/20

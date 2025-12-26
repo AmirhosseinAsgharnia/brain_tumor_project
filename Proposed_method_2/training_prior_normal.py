@@ -137,7 +137,7 @@ model = CNN_Class (num_of_classes=number_of_classes).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr = 1e-3, weight_decay=0.0)
 
-EPOCHS = 100  # start small to test
+EPOCHS = 20  # start small to test
 
 def train_one_epoch(model, dataloader, optimizer, criterion):
     model.train()
