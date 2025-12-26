@@ -1,178 +1,212 @@
 # prior_model.py
-# Handcrafted PRIOR network:
-#   1ch input -> 60ch
-#   Gaussian stage -> Derivative stage -> Gabor stage
-#   Downsample: 224 -> 112 -> 56 -> 28
-#   Flatten -> deterministic FC
-#
-# Only the 1x1 pointwise mixing convs + FC are learned.
-# The depthwise handcrafted kernels are FIXED buffers (no grads).
+# Frozen separable CNN with depthwise spatial filters sampled from stage_1.5 diagonal Gaussians.
+# Only the final FC layer is trainable in Stage 2.
 
 import math
+from typing import Dict, Any, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-# -----------------------------
-# Kernel generators (torch)
-# -----------------------------
-def _meshgrid(ksize: int, device=None, dtype=None):
-    r = ksize // 2
-    xs = torch.arange(-r, r + 1, device=device, dtype=dtype)
-    yy, xx = torch.meshgrid(xs, xs, indexing="ij")
-    return xx, yy
-
-def gaussian2d(ksize: int, sigma: float, device=None, dtype=None):
-    xx, yy = _meshgrid(ksize, device=device, dtype=dtype)
-    g = torch.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
-    g = g / (g.sum() + 1e-12)
-    return g
-
-def gaussian_derivative_x(ksize: int, sigma: float, device=None, dtype=None):
-    xx, yy = _meshgrid(ksize, device=device, dtype=dtype)
-    g = torch.exp(-(xx**2 + yy**2) / (2.0 * sigma**2))
-    gx = -(xx / (sigma**2)) * g
-    gx = gx - gx.mean()  # zero-mean
-    gx = gx / (gx.norm() + 1e-12)
-    return gx
-
-def gaussian_derivative_y(ksize: int, sigma: float, device=None, dtype=None):
-    return gaussian_derivative_x(ksize, sigma, device=device, dtype=dtype).t()
-
-def gabor2d(
-    ksize: int,
-    sigma: float,
-    theta: float,
-    lambd: float,
-    gamma: float = 0.5,
-    psi: float = 0.0,
-    device=None,
-    dtype=None,
-):
-    xx, yy = _meshgrid(ksize, device=device, dtype=dtype)
-    # rotate
-    x_theta = xx * math.cos(theta) + yy * math.sin(theta)
-    y_theta = -xx * math.sin(theta) + yy * math.cos(theta)
-
-    gauss = torch.exp(-(x_theta**2 + (gamma**2) * y_theta**2) / (2.0 * sigma**2))
-    wave = torch.cos(2.0 * math.pi * x_theta / lambd + psi)
-    g = gauss * wave
-    g = g - g.mean()
-    g = g / (g.norm() + 1e-12)
-    return g
+def _load_prior_fits(prior_pt_path: str, device: torch.device) -> Dict[str, Any]:
+    payload = torch.load(prior_pt_path, map_location=device)
+    if "fits" not in payload:
+        raise RuntimeError(f"Invalid prior file: missing 'fits' in {prior_pt_path}")
+    return payload
 
 
-# -----------------------------
-# Fixed depthwise conv wrapper
-# -----------------------------
-class FixedDepthwiseConv2d(nn.Module):
+def _get_fit(payload: Dict[str, Any], name: str) -> Dict[str, torch.Tensor]:
+    fits = payload["fits"]
+    if name not in fits:
+        raise KeyError(f"Prior fit '{name}' not found. Available: {list(fits.keys())}")
+    return fits[name]
+
+
+def _sample_spatial_kernel(mu_flat: torch.Tensor, sigma_flat: torch.Tensor, out_shape: torch.Size) -> torch.Tensor:
     """
-    Depthwise conv with fixed kernels replicated across channels.
-    weight buffer shape: [C, 1, k, k]
+    mu_flat, sigma_flat: [k*k]
+    out_shape: (C, 1, k, k) or (C, 1, k, k)
+    Returns sampled tensor with out_shape.
     """
-    def __init__(self, channels: int, kernel: torch.Tensor, stride: int = 1, padding: int = 1):
+    k2 = mu_flat.numel()
+    k = int(math.isqrt(k2))
+    if k * k != k2:
+        raise RuntimeError(f"mu length {k2} is not a perfect square")
+
+    mu = mu_flat.view(1, 1, k, k)
+    sigma = sigma_flat.view(1, 1, k, k)
+
+    # Broadcast to channels
+    C = out_shape[0]
+    mu = mu.expand(C, 1, k, k)
+    sigma = sigma.expand(C, 1, k, k)
+
+    eps = torch.randn((C, 1, k, k), device=mu.device, dtype=mu.dtype)
+    w = mu + sigma * eps
+    return w
+
+
+class FrozenSeparableBlock(nn.Module):
+    """
+    Depthwise spatial conv (sampled from a specified prior fit) + frozen pointwise mixing conv.
+    Stride is applied on depthwise conv to handle downsampling.
+
+    - Depthwise: groups=in_ch, out_ch=in_ch
+    - Pointwise: 1x1, out_ch=out_ch
+    """
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        ksize: int,
+        stride: int,
+        prior_mu: torch.Tensor,     # [k*k]
+        prior_sigma: torch.Tensor,  # [k*k]
+        device: torch.device,
+    ):
         super().__init__()
-        assert kernel.ndim == 2, "kernel must be [k,k]"
-        k = kernel.shape[0]
-        assert kernel.shape[0] == kernel.shape[1], "kernel must be square"
 
-        w = kernel.view(1, 1, k, k).repeat(channels, 1, 1, 1)  # [C,1,k,k]
-        self.register_buffer("weight", w)
-        self.stride = stride
-        self.padding = padding
-        self.groups = channels
+        pad = ksize // 2
 
-    def forward(self, x):
-        # x: [B,C,H,W]
-        return F.conv2d(x, self.weight, bias=None, stride=self.stride, padding=self.padding, groups=self.groups) #type: ignore
+        # Depthwise conv
+        self.dw = nn.Conv2d(
+            in_channels=in_ch,
+            out_channels=in_ch,
+            kernel_size=ksize,
+            stride=stride,
+            padding=pad,
+            groups=in_ch,
+            bias=False,
+        )
 
+        # Sample and freeze depthwise weights
+        with torch.no_grad():
+            w = _sample_spatial_kernel(prior_mu, prior_sigma, self.dw.weight.shape)
+            self.dw.weight.copy_(w)
 
-# -----------------------------
-# Prior blocks
-# -----------------------------
-class PriorBlock(nn.Module):
-    """
-    Fixed depthwise handcrafted filter -> learned 1x1 mixing -> ReLU
-    """
-    def __init__(self, channels: int, kernel_2d: torch.Tensor, stride: int = 1, padding: int = 1):
-        super().__init__()
-        self.dw = FixedDepthwiseConv2d(channels, kernel_2d, stride=stride, padding=padding)
-        self.pw = nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0, bias=True)
+        for p in self.dw.parameters():
+            p.requires_grad = False
+
+        # Pointwise conv (frozen mixing)
+        self.pw = nn.Conv2d(
+            in_channels=in_ch,
+            out_channels=out_ch,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            groups=1,
+            bias=False,
+        )
+
+        # Fixed random mixing (Kaiming init) and freeze
+        with torch.no_grad():
+            nn.init.kaiming_normal_(self.pw.weight, mode="fan_out", nonlinearity="relu")
+        for p in self.pw.parameters():
+            p.requires_grad = False
+
         self.act = nn.ReLU(inplace=True)
 
-    def forward(self, x):
+        # Move to device explicitly (safety)
+        self.to(device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.dw(x)
         x = self.pw(x)
         x = self.act(x)
         return x
 
 
-# -----------------------------
-# PriorNet
-# -----------------------------
-class PriorNet(nn.Module):
-    def __init__(self, num_classes: int = 4, channels: int = 60, ksize: int = 3):
+class PriorCNN(nn.Module):
+    """
+    Stage-2 prior model:
+      - 3 frozen separable conv blocks
+      - flatten
+      - trainable FC classifier only
+
+    Spatial schedule: 224 -> 112 -> 56 -> 28 (stride=2 each block)
+    Channel schedule: 1 -> 60 -> 60 -> 60
+    Kernel sizes: 7, 5, 3
+
+    Priors (from stage_1.5):
+      - layer1 depthwise uses 'deriv1_k7' (or you can switch to 'gauss_k7')
+      - layer2 depthwise uses 'deriv2_k5'
+      - layer3 depthwise uses 'gabor_k3'
+    """
+    def __init__(
+        self,
+        num_classes: int,
+        prior_pt_path: str = "./artifacts/priors_diag_gauss.pt",
+        layer1_prior: str = "deriv1_k7",
+        layer2_prior: str = "deriv2_k5",
+        layer3_prior: str = "gabor_k3",
+        device: Optional[torch.device] = None,
+        img_size: int = 224,
+        final_spatial: int = 28,
+        channels: int = 60,
+    ):
         super().__init__()
-        self.num_classes = num_classes
-        self.channels = channels
-        self.ksize = ksize
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
 
-        # Stem: 1 -> 60 (learned)
-        self.stem = nn.Sequential(
-            nn.Conv2d(1, channels, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.ReLU(inplace=True),
+        payload = _load_prior_fits(prior_pt_path, device=device)
+
+        f1 = _get_fit(payload, layer1_prior)
+        f2 = _get_fit(payload, layer2_prior)
+        f3 = _get_fit(payload, layer3_prior)
+
+        # Validate kernel sizes match intended structure
+        k1 = int(f1["ksize"].item()) if isinstance(f1["ksize"], torch.Tensor) else int(f1["ksize"])
+        k2 = int(f2["ksize"].item()) if isinstance(f2["ksize"], torch.Tensor) else int(f2["ksize"])
+        k3 = int(f3["ksize"].item()) if isinstance(f3["ksize"], torch.Tensor) else int(f3["ksize"])
+
+        if k1 != 7 or k2 != 5 or k3 != 3:
+            raise RuntimeError(f"Expected k=(7,5,3) but got ({k1},{k2},{k3}). Regenerate priors or change config.")
+
+        # Record recipe for Stage 3
+        self.prior_recipe = {
+            "prior_pt_path": prior_pt_path,
+            "layer1_prior": layer1_prior,
+            "layer2_prior": layer2_prior,
+            "layer3_prior": layer3_prior,
+            "kernels": [k1, k2, k3],
+            "channels": [1, channels, channels, channels],
+            "strides": [2, 2, 2],
+            "img_size": img_size,
+            "final_spatial": final_spatial,
+        }
+
+        # Build frozen blocks
+        self.block1 = FrozenSeparableBlock(
+            in_ch=1, out_ch=channels, ksize=7, stride=2,
+            prior_mu=f1["mu"].to(device), prior_sigma=f1["sigma"].to(device), device=device
+        )
+        self.block2 = FrozenSeparableBlock(
+            in_ch=channels, out_ch=channels, ksize=5, stride=2,
+            prior_mu=f2["mu"].to(device), prior_sigma=f2["sigma"].to(device), device=device
+        )
+        self.block3 = FrozenSeparableBlock(
+            in_ch=channels, out_ch=channels, ksize=3, stride=2,
+            prior_mu=f3["mu"].to(device), prior_sigma=f3["sigma"].to(device), device=device
         )
 
-        # --- Create handcrafted kernels (on CPU; buffers move with model.to(device)) ---
-        # Gaussian stage kernels (use a mild sigma)
-        g1 = gaussian2d(ksize, sigma=1.0)
-        g2 = gaussian2d(ksize, sigma=1.4)
+        # Classifier (trainable)
+        feat_dim = channels * final_spatial * final_spatial
+        self.fc = nn.Linear(feat_dim, num_classes)
 
-        # Derivative stage kernels
-        dx = gaussian_derivative_x(ksize, sigma=1.0)
-        dy = gaussian_derivative_y(ksize, sigma=1.0)
+        self.to(device)
 
-        # Gabor stage kernels (a couple of orientations)
-        gb0 = gabor2d(ksize, sigma=1.6, theta=0.0,        lambd=3.0, gamma=0.7, psi=0.0)
-        gb1 = gabor2d(ksize, sigma=1.6, theta=math.pi/4,  lambd=3.0, gamma=0.7, psi=0.0)
-        gb2 = gabor2d(ksize, sigma=1.6, theta=math.pi/2,  lambd=3.0, gamma=0.7, psi=0.0)
-
-        pad = ksize // 2
-
-        # 224 -> 112 (stride 2) within Gaussian stage
-        self.gaussian_1 = PriorBlock(channels, g1, stride=2, padding=pad)
-        self.gaussian_2 = PriorBlock(channels, g2, stride=1, padding=pad)
-
-        # 112 -> 56 (stride 2) within Derivative stage
-        self.deriv_1 = PriorBlock(channels, dx, stride=2, padding=pad)
-        self.deriv_2 = PriorBlock(channels, dy, stride=1, padding=pad)
-
-        # 56 -> 28 (stride 2) within Gabor stage
-        self.gabor_1 = PriorBlock(channels, gb0, stride=2, padding=pad)
-        self.gabor_2 = PriorBlock(channels, gb1, stride=1, padding=pad)
-        self.gabor_3 = PriorBlock(channels, gb2, stride=1, padding=pad)
-
-        # Head: flatten 60*28*28 -> num_classes (deterministic)
-        self.classifier = nn.Sequential(
-            nn.Linear(channels * 28 * 28, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, num_classes),
-        )
-
-    def forward(self, x):
-        # x: [B,1,224,224]
-        x = self.stem(x)          # [B,60,224,224]
-        x = self.gaussian_1(x)    # [B,60,112,112]
-        x = self.gaussian_2(x)    # [B,60,112,112]
-
-        x = self.deriv_1(x)       # [B,60,56,56]
-        x = self.deriv_2(x)       # [B,60,56,56]
-
-        x = self.gabor_1(x)       # [B,60,28,28]
-        x = self.gabor_2(x)       # [B,60,28,28]
-        x = self.gabor_3(x)       # [B,60,28,28]
-
-        x = torch.flatten(x, 1)   # [B, 60*28*28]
-        x = self.classifier(x)    # [B, num_classes]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.device)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
         return x
+
+    def trainable_parameters(self):
+        # Only FC should train in Stage 2
+        return self.fc.parameters()

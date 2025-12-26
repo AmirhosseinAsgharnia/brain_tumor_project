@@ -1,250 +1,277 @@
 # posterior_model.py
-# Bayesian (variational) depthwise-separable CNN for 1-channel input.
-# Every Conv/Linear weight + bias is Gaussian: q(theta)=N(mu, sigma^2).
-# KL is analytic vs a Gaussian prior p(theta)=N(mu_p, sigma_p^2) with scalar (layerwise) params.
+# Stage 3 posterior model: Bayesian depthwise convs + deterministic pointwise convs + Bayesian FC.
+# KL(q||p) is closed-form because both prior and posterior are diagonal Gaussians.
 
 import math
+from typing import Dict, Any, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-def softplus(x):
-    return torch.log1p(torch.exp(-torch.abs(x))) + torch.maximum(x, torch.zeros_like(x))
+def softplus(x: torch.Tensor) -> torch.Tensor:
+    return F.softplus(x)
 
 
-def kl_diag_gaussian(mu_q, sigma_q, mu_p, sigma_p):
-    # KL( N(mu_q, sigma_q^2) || N(mu_p, sigma_p^2) ) summed over all elements
+def kl_diag_gaussian(mu_q: torch.Tensor, sigma_q: torch.Tensor,
+                     mu_p: torch.Tensor, sigma_p: torch.Tensor) -> torch.Tensor:
+    """
+    KL( N(mu_q, sigma_q^2) || N(mu_p, sigma_p^2) ) for diagonal Gaussians.
+    All tensors must be broadcastable to same shape.
+    Returns scalar KL (sum over all elements).
+    """
+    # safety
+    eps = 1e-12
+    sigma_q = torch.clamp(sigma_q, min=eps)
+    sigma_p = torch.clamp(sigma_p, min=eps)
+
     return torch.sum(
         torch.log(sigma_p / sigma_q) +
-        (sigma_q**2 + (mu_q - mu_p)**2) / (2.0 * sigma_p**2) - 0.5
+        (sigma_q * sigma_q + (mu_q - mu_p) * (mu_q - mu_p)) / (2.0 * sigma_p * sigma_p) - 0.5
     )
 
 
-class BayesianConv2d(nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        groups=1,
-        bias=True,
-        prior_mu=0.0,
-        prior_sigma=0.1,
-        init_rho=-3.0,
-    ):
+class BayesianParam(nn.Module):
+    """
+    Diagonal Gaussian variational parameterization for a weight tensor:
+      q(w) = N(mu, sigma^2), sigma = softplus(rho).
+    Prior is fixed diagonal Gaussian with given (mu_p, sigma_p).
+    """
+    def __init__(self, shape: torch.Size,
+                 prior_mu: torch.Tensor,
+                 prior_sigma: torch.Tensor,
+                 init_mu: Optional[torch.Tensor] = None,
+                 init_rho: float = -3.0):
         super().__init__()
 
-        if isinstance(kernel_size, tuple):
-            kh, kw = kernel_size
-        else:
-            kh = kw = kernel_size
+        self.mu = nn.Parameter(torch.zeros(shape))
+        self.rho = nn.Parameter(torch.full(shape, float(init_rho)))
 
+        # init mu
+        with torch.no_grad():
+            if init_mu is not None:
+                self.mu.copy_(init_mu)
+            else:
+                self.mu.zero_()
+
+        # Prior buffers (fixed)
+        self.register_buffer("prior_mu", prior_mu)
+        self.register_buffer("prior_sigma", prior_sigma)
+
+    def sigma(self) -> torch.Tensor:
+        return softplus(self.rho)
+
+    def sample(self) -> torch.Tensor:
+        eps = torch.randn_like(self.mu)
+        return self.mu + self.sigma() * eps
+
+    def kl(self) -> torch.Tensor:
+        return kl_diag_gaussian(self.mu, self.sigma(), self.prior_mu, self.prior_sigma)
+
+
+def _template_to_weight(shape: torch.Size, mu_flat: torch.Tensor, sigma_flat: torch.Tensor,
+                        in_ch: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Broadcast prior template (k*k) to a depthwise conv weight shape: [in_ch, 1, k, k]
+    """
+    k2 = mu_flat.numel()
+    k = int(math.isqrt(k2))
+    if k * k != k2:
+        raise RuntimeError(f"Prior template length {k2} is not a perfect square")
+
+    mu = mu_flat.view(1, 1, k, k).expand(in_ch, 1, k, k).contiguous()
+    sigma = sigma_flat.view(1, 1, k, k).expand(in_ch, 1, k, k).contiguous()
+
+    if tuple(mu.shape) != tuple(shape):
+        raise RuntimeError(f"Template broadcast mismatch. Want {shape}, got {mu.shape}")
+
+    return mu, sigma
+
+
+class BayesianDepthwiseConv2d(nn.Module):
+    """
+    Bayesian depthwise conv: groups=in_ch, weight shape [in_ch, 1, k, k]
+    Prior comes from stage_1.5 templates broadcasted to channels.
+    """
+    def __init__(self, in_ch: int, ksize: int, stride: int,
+                 prior_mu_flat: torch.Tensor, prior_sigma_flat: torch.Tensor,
+                 init_mu_from: Optional[torch.Tensor] = None):
+        super().__init__()
+        pad = ksize // 2
+
+        self.in_ch = in_ch
+        self.ksize = ksize
         self.stride = stride
-        self.padding = padding
-        self.groups = groups
-        self.use_bias = bias
+        self.padding = pad
 
-        # Weight shape matches torch Conv2d:
-        # [out_channels, in_channels // groups, kh, kw]
-        w_shape = (out_channels, in_channels // groups, kh, kw)
-        self.w_mu = nn.Parameter(torch.zeros(w_shape))
-        self.w_rho = nn.Parameter(torch.full(w_shape, float(init_rho)))
+        w_shape = torch.Size([in_ch, 1, ksize, ksize])
 
-        if bias:
-            self.b_mu = nn.Parameter(torch.zeros(out_channels))
-            self.b_rho = nn.Parameter(torch.full((out_channels,), float(init_rho)))
-        else:
-            self.register_parameter("b_mu", None)
-            self.register_parameter("b_rho", None)
+        prior_mu, prior_sigma = _template_to_weight(w_shape, prior_mu_flat, prior_sigma_flat, in_ch)
 
-        # Scalar Gaussian prior for this layer (simple + stable)
-        self.register_buffer("prior_mu", torch.tensor(float(prior_mu)))
-        self.register_buffer("prior_sigma", torch.tensor(float(prior_sigma)))
+        self.w = BayesianParam(
+            shape=w_shape,
+            prior_mu=prior_mu,
+            prior_sigma=prior_sigma,
+            init_mu=init_mu_from,
+            init_rho=-3.0,
+        )
 
-    def sample_params(self):
-        w_sigma = softplus(self.w_rho)
-        w = self.w_mu + w_sigma * torch.randn_like(w_sigma)
+    def forward(self, x: torch.Tensor, sample: bool = True) -> torch.Tensor:
+        w = self.w.sample() if sample else self.w.mu
+        return F.conv2d(x, w, bias=None, stride=self.stride, padding=self.padding, groups=self.in_ch)
 
-        if self.use_bias:
-            b_sigma = softplus(self.b_rho)
-            b = self.b_mu + b_sigma * torch.randn_like(b_sigma)
-        else:
-            b = None
+    def kl(self) -> torch.Tensor:
+        return self.w.kl()
 
-        return w, b
 
-    def forward(self, x, sample=True):
-        if sample:
-            w, b = self.sample_params()
-        else:
-            w, b = self.w_mu, (self.b_mu if self.use_bias else None)
+class PosteriorSeparableBlock(nn.Module):
+    """
+    Bayesian depthwise spatial conv + deterministic pointwise mixing conv.
+    """
+    def __init__(self, in_ch: int, out_ch: int, ksize: int, stride: int,
+                 prior_mu_flat: torch.Tensor, prior_sigma_flat: torch.Tensor,
+                 init_dw_mu_from: Optional[torch.Tensor] = None):
+        super().__init__()
 
-        return F.conv2d(x, w, b, stride=self.stride, padding=self.padding, groups=self.groups)
+        self.dw = BayesianDepthwiseConv2d(
+            in_ch=in_ch,
+            ksize=ksize,
+            stride=stride,
+            prior_mu_flat=prior_mu_flat,
+            prior_sigma_flat=prior_sigma_flat,
+            init_mu_from=init_dw_mu_from,
+        )
 
-    def kl_loss(self):
-        w_sigma = softplus(self.w_rho)
-        mu_p = self.prior_mu
-        sigma_p = self.prior_sigma
-        kl = kl_diag_gaussian(self.w_mu, w_sigma, mu_p, sigma_p)
+        # Deterministic pointwise (trainable)
+        self.pw = nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=1, padding=0, bias=False)
+        nn.init.kaiming_normal_(self.pw.weight, mode="fan_out", nonlinearity="relu")
 
-        if self.use_bias:
-            b_sigma = softplus(self.b_rho)
-            kl = kl + kl_diag_gaussian(self.b_mu, b_sigma, mu_p, sigma_p)
+        self.act = nn.ReLU(inplace=True)
 
-        return kl
+    def forward(self, x: torch.Tensor, sample: bool = True) -> torch.Tensor:
+        x = self.dw(x, sample=sample)
+        x = self.pw(x)
+        x = self.act(x)
+        return x
+
+    def kl(self) -> torch.Tensor:
+        return self.dw.kl()
 
 
 class BayesianLinear(nn.Module):
-    def __init__(self, in_features, out_features, bias=True, prior_mu=0.0, prior_sigma=0.1, init_rho=-3.0):
+    """
+    Bayesian linear layer with diagonal Gaussian posterior.
+    Prior is fixed diagonal Gaussian.
+    """
+    def __init__(self, in_features: int, out_features: int,
+                 prior_mu: float = 0.0, prior_sigma: float = 1.0,
+                 init_mu_from: Optional[torch.Tensor] = None):
         super().__init__()
-        self.use_bias = bias
+        w_shape = torch.Size([out_features, in_features])
+        b_shape = torch.Size([out_features])
 
-        w_shape = (out_features, in_features)
-        self.w_mu = nn.Parameter(torch.zeros(w_shape))
-        self.w_rho = nn.Parameter(torch.full(w_shape, float(init_rho)))
+        prior_mu_w = torch.full(w_shape, float(prior_mu))
+        prior_sigma_w = torch.full(w_shape, float(prior_sigma))
+        prior_mu_b = torch.full(b_shape, float(prior_mu))
+        prior_sigma_b = torch.full(b_shape, float(prior_sigma))
 
-        if bias:
-            self.b_mu = nn.Parameter(torch.zeros(out_features))
-            self.b_rho = nn.Parameter(torch.full((out_features,), float(init_rho)))
-        else:
-            self.register_parameter("b_mu", None)
-            self.register_parameter("b_rho", None)
+        self.w = BayesianParam(w_shape, prior_mu_w, prior_sigma_w, init_mu=init_mu_from, init_rho=-3.0)
+        self.b = BayesianParam(b_shape, prior_mu_b, prior_sigma_b, init_mu=None, init_rho=-3.0)
 
-        self.register_buffer("prior_mu", torch.tensor(float(prior_mu)))
-        self.register_buffer("prior_sigma", torch.tensor(float(prior_sigma)))
-
-    def sample_params(self):
-        w_sigma = softplus(self.w_rho)
-        w = self.w_mu + w_sigma * torch.randn_like(w_sigma)
-
-        if self.use_bias:
-            b_sigma = softplus(self.b_rho)
-            b = self.b_mu + b_sigma * torch.randn_like(b_sigma)
-        else:
-            b = None
-
-        return w, b
-
-    def forward(self, x, sample=True):
-        if sample:
-            w, b = self.sample_params()
-        else:
-            w, b = self.w_mu, (self.b_mu if self.use_bias else None)
+    def forward(self, x: torch.Tensor, sample: bool = True) -> torch.Tensor:
+        w = self.w.sample() if sample else self.w.mu
+        b = self.b.sample() if sample else self.b.mu
         return F.linear(x, w, b)
 
-    def kl_loss(self):
-        w_sigma = softplus(self.w_rho)
-        mu_p = self.prior_mu
-        sigma_p = self.prior_sigma
-        kl = kl_diag_gaussian(self.w_mu, w_sigma, mu_p, sigma_p)
-
-        if self.use_bias:
-            b_sigma = softplus(self.b_rho)
-            kl = kl + kl_diag_gaussian(self.b_mu, b_sigma, mu_p, sigma_p)
-
-        return kl
+    def kl(self) -> torch.Tensor:
+        return self.w.kl() + self.b.kl()
 
 
-class PosteriorNet(nn.Module):
+class PosteriorCNN(nn.Module):
     """
-    Your depthwise-separable shape, corrected to 1-channel input:
-
-    DW: 1->1 (groups=1, stride=2) then PW 1->32
-    ... then standard DW/PW chain up to 1024
-    AdaptiveAvgPool -> Linear -> Linear
-
-    All Bayesian.
+    Stage 3 posterior CNN with:
+      - 3 separable blocks: Bayesian depthwise + deterministic pointwise
+      - Bayesian FC
     """
-    def __init__(self, num_classes=4, prior_mu=0.0, prior_sigma=0.1):
+    def __init__(
+        self,
+        num_classes: int,
+        prior_recipe: Dict[str, Any],
+        priors_pt_path: str = "./artifacts/priors_diag_gauss.pt",
+        init_from_stage2_state: Optional[Dict[str, torch.Tensor]] = None,
+        device: Optional[torch.device] = None,
+    ):
         super().__init__()
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
 
-        # Feature extractor blocks (Bayesian)
-        self.feature = nn.ModuleList([
-            # 224 -> 112
-            BayesianConv2d(1, 1, kernel_size=3, stride=2, padding=1, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(1, 32, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        # Load fitted priors
+        payload = torch.load(priors_pt_path, map_location=device)
+        fits = payload["fits"]
 
-            # 112 -> 112
-            BayesianConv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(32, 32, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        # Pull recipe
+        l1_name = prior_recipe["layer1_prior"]
+        l2_name = prior_recipe["layer2_prior"]
+        l3_name = prior_recipe["layer3_prior"]
 
-            # 112 -> 112
-            BayesianConv2d(32, 32, kernel_size=3, stride=1, padding=1, groups=32, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(32, 64, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        f1 = fits[l1_name]
+        f2 = fits[l2_name]
+        f3 = fits[l3_name]
 
-            # 112 -> 56
-            BayesianConv2d(64, 64, kernel_size=3, stride=2, padding=1, groups=64, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(64, 128, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        # Architecture (fixed by recipe)
+        channels = int(prior_recipe["channels"][1])
+        final_spatial = int(prior_recipe["final_spatial"])
 
-            # 56 -> 28
-            BayesianConv2d(128, 128, kernel_size=3, stride=2, padding=1, groups=128, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(128, 256, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        # Optional init from stage2 sampled weights
+        init_dw1 = None
+        init_dw2 = None
+        init_dw3 = None
+        init_fc = None
 
-            # 28 -> 14
-            BayesianConv2d(256, 256, kernel_size=3, stride=2, padding=1, groups=256, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(256, 512, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
+        if init_from_stage2_state is not None:
+            # Stage2 had frozen conv weights at:
+            # block1.dw.weight, block2.dw.weight, block3.dw.weight
+            # and fc.weight, fc.bias (deterministic)
+            if "block1.dw.weight" in init_from_stage2_state:
+                init_dw1 = init_from_stage2_state["block1.dw.weight"].to(device)
+            if "block2.dw.weight" in init_from_stage2_state:
+                init_dw2 = init_from_stage2_state["block2.dw.weight"].to(device)
+            if "block3.dw.weight" in init_from_stage2_state:
+                init_dw3 = init_from_stage2_state["block3.dw.weight"].to(device)
+            if "fc.weight" in init_from_stage2_state:
+                init_fc = init_from_stage2_state["fc.weight"].to(device)
 
-            # 14 -> 7
-            BayesianConv2d(512, 512, kernel_size=3, stride=2, padding=1, groups=512, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            BayesianConv2d(512, 1024, kernel_size=1, stride=1, padding=0, groups=1, bias=True,
-                          prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
-        ])
+        self.block1 = PosteriorSeparableBlock(
+            in_ch=1, out_ch=channels, ksize=7, stride=2,
+            prior_mu_flat=f1["mu"].to(device), prior_sigma_flat=f1["sigma"].to(device),
+            init_dw_mu_from=init_dw1
+        )
+        self.block2 = PosteriorSeparableBlock(
+            in_ch=channels, out_ch=channels, ksize=5, stride=2,
+            prior_mu_flat=f2["mu"].to(device), prior_sigma_flat=f2["sigma"].to(device),
+            init_dw_mu_from=init_dw2
+        )
+        self.block3 = PosteriorSeparableBlock(
+            in_ch=channels, out_ch=channels, ksize=3, stride=2,
+            prior_mu_flat=f3["mu"].to(device), prior_sigma_flat=f3["sigma"].to(device),
+            init_dw_mu_from=init_dw3
+        )
 
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        feat_dim = channels * final_spatial * final_spatial
+        self.fc = BayesianLinear(feat_dim, num_classes, prior_mu=0.0, prior_sigma=1.0, init_mu_from=init_fc)
 
-        self.classifier = nn.ModuleList([
-            BayesianLinear(1024, 256, bias=True, prior_mu=prior_mu, prior_sigma=prior_sigma),
-            nn.ReLU(inplace=True),
-            BayesianLinear(256, num_classes, bias=True, prior_mu=prior_mu, prior_sigma=prior_sigma),
-        ])
+        self.to(device)
 
-    def forward(self, x, sample=True):
-        for layer in self.feature:
-            if isinstance(layer, (BayesianConv2d, BayesianLinear)):
-                x = layer(x, sample=sample)
-            else:
-                x = layer(x)
-
-        x = self.pool(x)
+    def forward(self, x: torch.Tensor, sample: bool = True) -> torch.Tensor:
+        x = x.to(self.device)
+        x = self.block1(x, sample=sample)
+        x = self.block2(x, sample=sample)
+        x = self.block3(x, sample=sample)
         x = torch.flatten(x, 1)
-
-        for layer in self.classifier:
-            if isinstance(layer, (BayesianConv2d, BayesianLinear)):
-                x = layer(x, sample=sample)
-            else:
-                x = layer(x)
-
+        x = self.fc(x, sample=sample)
         return x
 
-    def kl_loss(self):
-        kl = 0.0
-        for layer in self.feature:
-            if hasattr(layer, "kl_loss"):
-                kl = kl + layer.kl_loss()
-        for layer in self.classifier:
-            if hasattr(layer, "kl_loss"):
-                kl = kl + layer.kl_loss()
-        return kl
+    def kl_loss(self) -> torch.Tensor:
+        return self.block1.kl() + self.block2.kl() + self.block3.kl() + self.fc.kl()

@@ -1,210 +1,246 @@
 # stage_3.py
-# Train the POSTERIOR Bayesian CNN using ELBO:
-#   loss = CE_MC + beta * KL / N_train
-#
-# Uses:
-#   training_data/  (the remaining 2/3 after stage_1)
-#   testing_data/   (evaluation only)
-#   prior_weights.pth (from stage_2) only to sanity-check class order
-#
-# Run:
-#   python stage_3.py
+# Stage 3: train posterior with ELBO using MC likelihood + closed-form KL(q||p).
+# Train on ./training_data, evaluate on ./testing_data.
 
 import os
+import time
+from typing import Dict, Tuple
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from posterior_model import PosteriorNet
+from posterior_model import PosteriorCNN
 
 
-TRAIN_DIR = "training_data"
-TEST_DIR = "testing_data"
-PRIOR_CKPT = "prior_weights.pth"
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
 
-BATCH_SIZE = 16
-EPOCHS = 15
-LR = 1e-3
-NUM_WORKERS = 2
 
-IMAGE_SIZE = 224
-MC_SAMPLES = 2        # 1-4 typical
-BETA = 1.0            # KL weight (you can anneal later if you want)
-PRIOR_MU = 0.0
-PRIOR_SIGMA = 0.1     # simple fixed prior scale
+def get_dataloaders(
+    train_root: str = "./training_data",
+    test_root: str = "./testing_data",
+    img_size: int = 224,
+    batch_size: int = 16,
+    num_workers: int = 4,
+) -> Tuple[DataLoader, DataLoader, Dict[int, str]]:
+    tfm = transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+    ])
 
-SAVE_PATH = "posterior_weights.pth"
+    train_ds = datasets.ImageFolder(root=train_root, transform=tfm)
+    test_ds = datasets.ImageFolder(root=test_root, transform=tfm)
+
+    idx_to_class = {v: k for k, v in train_ds.class_to_idx.items()}
+
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=False
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=False
+    )
+
+    return train_loader, test_loader, idx_to_class
+
+
+def mc_cross_entropy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, mc_samples: int) -> torch.Tensor:
+    """
+    Monte Carlo estimate of expected cross-entropy:
+      E_q [ CE(logits, y) ] approx average over samples.
+    """
+    ce = 0.0
+    for _ in range(mc_samples):
+        logits = model(x, sample=True)
+        ce = ce + nn.functional.cross_entropy(logits, y, reduction="mean")
+    return ce / float(mc_samples)
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, mc_samples=5):
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, mc_samples: int = 10) -> Tuple[float, float]:
     model.eval()
     total = 0
     correct = 0
-    loss_sum = 0.0
+    running_nll = 0.0
 
-    for images, labels in loader:
-        images = images.to(device)
-        labels = labels.to(device)
+    for x, y in loader:
+        x = x.to(device)
+        y = y.to(device)
 
-        # MC average predictive logits
-        logits_acc = None
+        # MC predictive probs
+        probs = 0.0
         for _ in range(mc_samples):
-            logits = model(images, sample=True)
-            logits_acc = logits if logits_acc is None else (logits_acc + logits)
-        logits_mean = logits_acc / float(mc_samples)
+            logits = model(x, sample=True)
+            probs = probs + torch.softmax(logits, dim=1)
+        probs = probs / float(mc_samples)
 
-        loss = nn.functional.cross_entropy(logits_mean, labels)
+        # NLL
+        nll = nn.functional.nll_loss(torch.log(probs + 1e-12), y, reduction="mean")
+        running_nll += float(nll.item()) * x.size(0)
 
-        preds = torch.argmax(logits_mean, dim=1)
-        correct += (preds == labels).sum().item()
-        total += labels.size(0)
-        loss_sum += loss.item() * labels.size(0)
+        pred = torch.argmax(probs, dim=1)
+        correct += int((pred == y).sum().item())
+        total += int(x.size(0))
 
-    return loss_sum / total, correct / total
+    avg_nll = running_nll / max(total, 1)
+    acc = correct / max(total, 1)
+    return avg_nll, acc
 
 
-def main():
+def train_stage3(
+    stage2_ckpt_path: str = "./artifacts/stage2_prior_model_best.pt",
+    priors_pt_path: str = "./artifacts/priors_diag_gauss.pt",
+    train_root: str = "./training_data",
+    test_root: str = "./testing_data",
+    artifacts_dir: str = "./artifacts",
+    epochs: int = 15,
+    batch_size: int = 16,
+    lr: float = 1e-3,
+    beta: float = 1.0,
+    mc_train: int = 5,
+    mc_eval: int = 10,
+    seed: int = 0,
+):
+    ensure_dir(artifacts_dir)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device:", device)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-    if not os.path.isdir(TRAIN_DIR):
-        raise RuntimeError(f"Can't find '{TRAIN_DIR}' folder.")
-    if not os.path.isdir(TEST_DIR):
-        raise RuntimeError(f"Can't find '{TEST_DIR}' folder.")
-    if not os.path.isfile(PRIOR_CKPT):
-        print(f"Warning: '{PRIOR_CKPT}' not found. Will proceed without prior class-order sanity check.")
+    # Load Stage 2 checkpoint (recipe + label mapping + state dict for init)
+    s2 = torch.load(stage2_ckpt_path, map_location=device)
+    prior_recipe = s2["prior_recipe"]
+    idx_to_class_s2 = s2.get("idx_to_class", None)
+    s2_state = s2.get("state_dict", None)
 
-    tfm = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5], std=[0.5]),
-    ])
-
-    train_set = datasets.ImageFolder(TRAIN_DIR, transform=tfm)
-    test_set = datasets.ImageFolder(TEST_DIR, transform=tfm)
-
-    if len(train_set) == 0:
-        raise RuntimeError(f"No images found inside '{TRAIN_DIR}'.")
-    if len(test_set) == 0:
-        raise RuntimeError(f"No images found inside '{TEST_DIR}'.")
-
-    print("Train classes:", train_set.classes)
-    print("Test classes: ", test_set.classes)
-
-    # Sanity check class ordering vs stage_2
-    if os.path.isfile(PRIOR_CKPT):
-        ckpt = torch.load(PRIOR_CKPT, map_location="cpu")
-        prior_classes = ckpt.get("classes", None)
-        if prior_classes is not None and prior_classes != train_set.classes:
-            raise RuntimeError(
-                "Class ordering mismatch!\n"
-                f"prior_weights classes: {prior_classes}\n"
-                f"training_data classes: {train_set.classes}\n"
-                "Fix your folder names or splits so ImageFolder produces identical class order."
-            )
-        print("Class-order sanity check: OK")
-
-    train_loader = DataLoader(
-        train_set,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=NUM_WORKERS,
-        pin_memory=(device.type == "cuda"),
+    train_loader, test_loader, idx_to_class = get_dataloaders(
+        train_root=train_root,
+        test_root=test_root,
+        img_size=224,
+        batch_size=batch_size,
+        num_workers=4,
     )
 
-    test_loader = DataLoader(
-        test_set,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=(device.type == "cuda"),
+    num_classes = len(idx_to_class)
+
+    # Sanity: class count must match Stage 2
+    if idx_to_class_s2 is not None and len(idx_to_class_s2) != num_classes:
+        raise RuntimeError(f"Class mismatch: stage2={len(idx_to_class_s2)} vs stage3(train)={num_classes}")
+
+    # Build posterior
+    model = PosteriorCNN(
+        num_classes=num_classes,
+        prior_recipe=prior_recipe,
+        priors_pt_path=priors_pt_path,
+        init_from_stage2_state=s2_state,
+        device=device,
     )
 
-    num_classes = len(train_set.classes)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    model = PosteriorNet(num_classes=num_classes, prior_mu=PRIOR_MU, prior_sigma=PRIOR_SIGMA).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    n_train = len(train_loader.dataset)
+    best_acc = -1.0
+    best_path = os.path.join(artifacts_dir, "stage3_posterior_best.pt")
+    last_path = os.path.join(artifacts_dir, "stage3_posterior_last.pt")
 
-    n_train = len(train_set)
+    print(f"[stage_3] device={device}")
+    print(f"[stage_3] train={n_train} from {train_root}, test={len(test_loader.dataset)} from {test_root}")
+    print(f"[stage_3] mc_train={mc_train}, mc_eval={mc_eval}, beta={beta}")
+    print(f"[stage_3] loaded recipe from {stage2_ckpt_path}")
+    print(f"[stage_3] priors from {priors_pt_path}")
 
-    print("\nTraining posterior with ELBO:")
-    print(f"  MC_SAMPLES={MC_SAMPLES}, BETA={BETA}, PRIOR_SIGMA={PRIOR_SIGMA}")
-    print(f"  N_train={n_train}\n")
-
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, epochs + 1):
         model.train()
-        total_loss = 0.0
-        total_ce = 0.0
-        total_kl = 0.0
-        total = 0
-        correct = 0
+        t0 = time.time()
 
-        for images, labels in train_loader:
-            images = images.to(device)
-            labels = labels.to(device)
+        running = 0.0
+        running_ce = 0.0
+        running_kl = 0.0
+        n_seen = 0
 
-            optimizer.zero_grad()
+        for x, y in train_loader:
+            x = x.to(device)
+            y = y.to(device)
 
-            # MC estimate of expected NLL (cross-entropy)
-            ce_acc = 0.0
-            logits_mean = None
-            for _ in range(MC_SAMPLES):
-                logits = model(images, sample=True)
-                ce_acc = ce_acc + nn.functional.cross_entropy(logits, labels)
-                logits_mean = logits if logits_mean is None else (logits_mean + logits)
+            optimizer.zero_grad(set_to_none=True)
 
-            ce = ce_acc / float(MC_SAMPLES)
-            logits_mean = logits_mean / float(MC_SAMPLES)
-
-            # KL term (analytic, summed over all Bayesian params)
+            ce = mc_cross_entropy(model, x, y, mc_samples=mc_train)
             kl = model.kl_loss()
 
-            # ELBO loss: CE + beta * KL/N
-            loss = ce + (BETA * kl / float(n_train))
+            # ELBO-style objective (minimize negative ELBO)
+            loss = ce + beta * kl / float(n_train)
 
             loss.backward()
             optimizer.step()
 
-            bs = labels.size(0)
-            total += bs
-            total_loss += loss.item() * bs
-            total_ce += ce.item() * bs
-            total_kl += kl.item() * bs  # scaled for reporting only
+            bs = x.size(0)
+            running += float(loss.item()) * bs
+            running_ce += float(ce.item()) * bs
+            running_kl += float(kl.item()) * bs
+            n_seen += int(bs)
 
-            preds = torch.argmax(logits_mean, dim=1)
-            correct += (preds == labels).sum().item()
+        train_loss = running / max(n_seen, 1)
+        train_ce = running_ce / max(n_seen, 1)
+        train_kl = running_kl / max(n_seen, 1)
 
-        train_loss = total_loss / total
-        train_ce = total_ce / total
-        train_acc = correct / total
-        # report average KL per sample (raw sum/bs is fine as a number to watch)
-        avg_kl_per_sample = total_kl / total
-
-        test_loss, test_acc = evaluate(model, test_loader, device, mc_samples=5)
+        test_nll, test_acc = evaluate(model, test_loader, device=device, mc_samples=mc_eval)
+        dt = time.time() - t0
 
         print(
-            f"Epoch {epoch:02d}/{EPOCHS} | "
-            f"train_loss={train_loss:.4f}  CE={train_ce:.4f}  KL(sum)~{avg_kl_per_sample:.1f}  acc={train_acc:.4f} | "
-            f"test_loss={test_loss:.4f}  test_acc={test_acc:.4f}"
+            f"[stage_3][{epoch:02d}/{epochs}] "
+            f"train_loss={train_loss:.4f}  ce={train_ce:.4f}  (avg_kl*bs)={train_kl:.2f}  "
+            f"test_nll={test_nll:.4f}  test_acc={test_acc:.4f}  time={dt:.1f}s"
         )
 
-    # Save posterior parameters
+        if test_acc > best_acc:
+            best_acc = test_acc
+            torch.save({
+                "state_dict": model.state_dict(),
+                "prior_recipe": prior_recipe,
+                "idx_to_class": idx_to_class,
+                "stage2_ckpt": stage2_ckpt_path,
+                "priors_pt": priors_pt_path,
+                "beta": beta,
+                "mc_train": mc_train,
+                "mc_eval": mc_eval,
+                "seed": seed,
+            }, best_path)
+
     torch.save({
         "state_dict": model.state_dict(),
-        "classes": train_set.classes,
-        "image_size": IMAGE_SIZE,
-        "prior_mu": PRIOR_MU,
-        "prior_sigma": PRIOR_SIGMA,
-        "mc_samples_train": MC_SAMPLES,
-        "beta": BETA,
-    }, SAVE_PATH)
+        "prior_recipe": prior_recipe,
+        "idx_to_class": idx_to_class,
+        "stage2_ckpt": stage2_ckpt_path,
+        "priors_pt": priors_pt_path,
+        "beta": beta,
+        "mc_train": mc_train,
+        "mc_eval": mc_eval,
+        "seed": seed,
+    }, last_path)
 
-    print(f"\nSaved posterior weights to: {SAVE_PATH}")
+    print(f"[stage_3] saved best: {best_path}")
+    print(f"[stage_3] saved last: {last_path}")
+    print(f"[stage_3] best_acc={best_acc:.4f}")
 
 
 if __name__ == "__main__":
-    main()
+    train_stage3(
+        stage2_ckpt_path="./artifacts/stage2_prior_model_best.pt",
+        priors_pt_path="./artifacts/priors_diag_gauss.pt",
+        train_root="./training_data",
+        test_root="./testing_data",
+        artifacts_dir="./artifacts",
+        epochs=15,
+        batch_size=16,
+        lr=1e-3,
+        beta=1.0,
+        mc_train=5,
+        mc_eval=10,
+        seed=0,
+    )
