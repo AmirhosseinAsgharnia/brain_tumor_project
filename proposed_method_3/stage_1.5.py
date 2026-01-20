@@ -171,21 +171,21 @@ def build_distributions() -> Dict[str, Dict]:
          "n": int,
       }
 
-    We construct 5 distributions consistent with your desired “story”:
       - L1: gauss_k7 + deriv1_k7
       - L2: deriv1_k5 + deriv2_k5
-      - L3: gabor_k3
+      - L3: gabor_k9
+      - L4: gabor_k11
     """
     distros: Dict[str, Dict] = {}
 
-    # Parameter grids (tune later if needed)
+    # Parameter grids
     sigma_gauss = [0.6, 0.8, 1.0, 1.3, 1.6, 2.0]
     sigma_deriv = [0.6, 0.8, 1.0, 1.3, 1.6]
-    sigma_gabor = [1.0, 1.5, 2.0]
-    lambd_grid = [2.0, 3.0, 4.0, 5.0]
-    theta_grid = [0.0, math.pi / 6, math.pi / 4, math.pi / 3, math.pi / 2, 2 * math.pi / 3]
+    sigma_gabor = [1.0, 2.0]
+    lambd_grid = [2.0, 4.0, 8.0]
+    theta_grid = [0.0, math.pi/4, math.pi/2, 3*math.pi/4]
     psi_grid = [0.0, math.pi / 2]
-    gamma_grid = [0.5, 0.8, 1.0]
+    gamma_grid = [0.5, 1.0]
 
     # ---- gauss_k7 ----
     samples = []
@@ -222,22 +222,35 @@ def build_distributions() -> Dict[str, Dict]:
     mu, var = fit_diag_gaussian(samples)
     distros["deriv2_k5"] = {"ksize": 5, "mu": mu, "var": var, "n": len(samples)}
 
-    # ---- gabor_k3 (cos + sin pooled) ----
+    # ---- gabor_k9 (cos + sin pooled) ----
     samples = []
     for s in sigma_gabor:
         for lambd in lambd_grid:
             for theta in theta_grid:
                 for psi in psi_grid:
                     for gamma in gamma_grid:
-                        kc = gabor_kernel(3, s, lambd, theta, psi, gamma, is_sin=False)
-                        ks = gabor_kernel(3, s, lambd, theta, psi, gamma, is_sin=True)
+                        kc = gabor_kernel(9, s, lambd, theta, psi, gamma, is_sin=False)
+                        ks = gabor_kernel(9, s, lambd, theta, psi, gamma, is_sin=True)
                         samples.append(flatten_k(kc))
                         samples.append(flatten_k(ks))
     mu, var = fit_diag_gaussian(samples)
-    distros["gabor_k3"] = {"ksize": 3, "mu": mu, "var": var, "n": len(samples)}
+    distros["gabor_k9"] = {"ksize": 9, "mu": mu, "var": var, "n": len(samples)}
+
+    # ---- gabor_k11 (cos + sin pooled) ----
+    samples = []
+    for s in sigma_gabor:
+        for lambd in lambd_grid:
+            for theta in theta_grid:
+                for psi in psi_grid:
+                    for gamma in gamma_grid:
+                        kc = gabor_kernel(11, s, lambd, theta, psi, gamma, is_sin=False)
+                        ks = gabor_kernel(11, s, lambd, theta, psi, gamma, is_sin=True)
+                        samples.append(flatten_k(kc))
+                        samples.append(flatten_k(ks))
+    mu, var = fit_diag_gaussian(samples)
+    distros["gabor_k11"] = {"ksize": 11, "mu": mu, "var": var, "n": len(samples)}
 
     return distros
-
 
 def save_pt(distros: Dict[str, Dict], out_path: str) -> None:
     """
@@ -263,7 +276,8 @@ def save_pt(distros: Dict[str, Dict], out_path: str) -> None:
     layer_recipe = {
         "layer1": {"ksize": 7, "prior": ["gauss_k7", "deriv1_k7"]},
         "layer2": {"ksize": 5, "prior": ["deriv1_k5", "deriv2_k5"]},
-        "layer3": {"ksize": 3, "prior": ["gabor_k3"]},
+        "layer3": {"ksize": 9, "prior": ["gabor_k9"]},
+        "layer4": {"ksize": 11, "prior": ["gabor_k11"]},
         # How to combine multiple priors for one layer:
         # We'll do a simple mixture later OR pick one per conv block.
         # For now we just record what's available for that layer.
