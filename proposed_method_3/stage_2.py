@@ -111,6 +111,7 @@ def train_stage2(
         layer1_prior="deriv1_k7",
         layer2_prior="deriv2_k5",
         layer3_prior="gabor_k3",
+        layer4_prior="gabor_k3",
         device=device,
         img_size=224,
         final_spatial=28,
